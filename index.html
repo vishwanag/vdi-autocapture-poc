@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Car Side Detection — Auto-Capture POC</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.5/dist/teachablemachine-image.min.js"></script>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#121923; --accent:#00a3e0; --good:#22c55e;
+    --warn:#f59e0b; --bad:#ef4444; --text:#e8eef6; --muted:#8ea2b6; --line:#22303f;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+  #app{display:flex;flex-direction:column;height:100dvh;max-width:520px;margin:0 auto;}
+
+  header{padding:10px 14px;border-bottom:1px solid var(--line);
+    display:flex;align-items:center;justify-content:space-between;}
+  header h1{font-size:15px;margin:0;font-weight:600;}
+  header .brand{font-size:11px;color:var(--muted);}
+
+  .steps{display:flex;gap:6px;padding:10px 12px;}
+  .step{flex:1;text-align:center;padding:8px 4px;border-radius:10px;
+    background:var(--panel);border:1px solid var(--line);font-size:11px;color:var(--muted);
+    transition:.25s;position:relative;}
+  .step .ic{font-size:16px;display:block;margin-bottom:2px;}
+  .step.active{border-color:var(--accent);color:var(--text);box-shadow:0 0 0 1px var(--accent) inset;}
+  .step.done{border-color:var(--good);color:var(--good);}
+  .step.done .ic::after{content:" ✓";}
+
+  .stage{position:relative;flex:1;background:#000;overflow:hidden;}
+  video,canvas.overlay{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  canvas.overlay{pointer-events:none;}
+
+  .guide{position:absolute;inset:8% 6%;border:2px dashed rgba(255,255,255,.55);
+    border-radius:16px;pointer-events:none;transition:.2s;}
+  .guide.lock{border-color:var(--good);border-style:solid;box-shadow:0 0 24px rgba(34,197,94,.5);}
+  .guide.wait{border-color:var(--warn);}
+  .guide.bad{border-color:var(--bad);}
+
+  /* Live prediction readout */
+  .pred{position:absolute;top:10px;left:10px;right:10px;background:rgba(0,0,0,.55);
+    border:1px solid var(--line);border-radius:12px;padding:8px 10px;font-size:11px;}
+  .pbar{display:flex;align-items:center;gap:8px;margin:3px 0;}
+  .pbar .name{width:44px;color:var(--muted);}
+  .pbar .track{flex:1;height:7px;background:#1c2836;border-radius:4px;overflow:hidden;}
+  .pbar .fill{height:100%;width:0;background:var(--accent);transition:width .15s;}
+  .pbar.top .name{color:var(--text);font-weight:700;}
+  .pbar.top .fill{background:var(--good);}
+
+  .hint{position:absolute;left:0;right:0;bottom:14px;text-align:center;pointer-events:none;}
+  .hint .pill{display:inline-block;background:rgba(0,0,0,.62);backdrop-filter:blur(6px);
+    padding:8px 16px;border-radius:999px;font-size:13px;border:1px solid var(--line);}
+  .pill.ok{color:var(--good);border-color:var(--good);}
+  .pill.warn{color:var(--warn);}
+  .pill.bad{color:var(--bad);border-color:var(--bad);}
+
+  .countdown{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    font-size:120px;font-weight:800;color:#fff;text-shadow:0 4px 30px rgba(0,0,0,.7);}
+  .flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;}
+
+  .tray{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--line);overflow-x:auto;}
+  .thumb{flex:0 0 74px;height:56px;border-radius:8px;border:1px solid var(--line);
+    background:var(--panel);position:relative;overflow:hidden;display:flex;
+    align-items:center;justify-content:center;font-size:10px;color:var(--muted);}
+  .thumb img{width:100%;height:100%;object-fit:cover;}
+  .thumb .lbl{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.6);
+    font-size:9px;text-align:center;padding:1px;}
+
+  .controls{padding:12px;display:flex;gap:10px;border-top:1px solid var(--line);}
+  button{flex:1;padding:13px;border-radius:12px;border:1px solid var(--line);
+    background:var(--panel);color:var(--text);font-size:14px;font-weight:600;cursor:pointer;}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#001019;}
+  button:disabled{opacity:.45;}
+
+  .status{padding:6px 14px;font-size:11px;color:var(--muted);text-align:center;min-height:18px;}
+  .toggle{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);}
+  .toggle input{accent-color:var(--accent);}
+
+  /* Setup gate */
+  .gate{position:absolute;inset:0;background:rgba(3,6,10,.96);z-index:20;display:flex;
+    flex-direction:column;align-items:center;justify-content:center;text-align:center;
+    padding:22px;gap:12px;overflow:auto;}
+  .gate h2{margin:0;font-size:18px;}
+  .gate p{margin:0;color:var(--muted);font-size:12.5px;max-width:360px;line-height:1.55;}
+  .gate ol{color:var(--muted);font-size:12px;text-align:left;max-width:360px;line-height:1.6;padding-left:18px;}
+  .gate input{width:100%;max-width:360px;padding:11px;border-radius:10px;border:1px solid var(--line);
+    background:#0e1520;color:var(--text);font-size:13px;}
+  .gate a{color:var(--accent);}
+  .gate .row{display:flex;gap:8px;max-width:360px;width:100%;}
+  .gate button{background:var(--accent);border:none;color:#001019;font-weight:700;}
+  .gate button.ghost{background:var(--panel);color:var(--text);border:1px solid var(--line);}
+  .demoNote{font-size:11px;color:var(--warn);max-width:360px;}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>🚗 Car Side Detection</h1>
+    <span class="brand">VDI POC · DENSO</span>
+  </header>
+
+  <div class="steps" id="steps"></div>
+
+  <div class="stage" id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas class="overlay" id="overlay"></canvas>
+    <div class="guide" id="guide"></div>
+    <div class="pred" id="pred" style="display:none"></div>
+    <div class="countdown" id="countdown"></div>
+    <div class="flash" id="flash"></div>
+    <div class="hint"><span class="pill" id="hint">Loading…</span></div>
+
+    <!-- Setup gate -->
+    <div class="gate" id="gate">
+      <h2>🎯 One-time setup (no coding)</h2>
+      <p>This POC uses a model that actually <b>recognises each side</b> of the car and auto-captures <b>only</b> when the correct side is in view.</p>
+      <p style="color:var(--text)"><b>Train your free model in ~10 min:</b></p>
+      <ol>
+        <li>Open <a href="https://teachablemachine.withgoogle.com/train/image" target="_blank">Teachable Machine → Image Project</a></li>
+        <li>Create <b>4 classes</b>, name them exactly: <b>Front, Left, Right, Rear</b></li>
+        <li>For each class, record ~40–60 photos of that side of the car (different angles/distances)</li>
+        <li>Click <b>Train Model</b> → then <b>Export Model</b> → <b>TensorFlow.js</b> → <b>Upload</b></li>
+        <li>Copy the <b>“Your sharable link”</b> URL and paste it below 👇</li>
+      </ol>
+      <input id="modelUrl" placeholder="https://teachablemachine.withgoogle.com/models/XXXXXXXX/" />
+      <div class="row">
+        <button id="loadBtn">Load model & Start</button>
+      </div>
+      <p class="demoNote">Tip: class names in Teachable Machine must match Front / Left / Right / Rear (any capitalisation).</p>
+    </div>
+  </div>
+
+  <div class="tray" id="tray"></div>
+  <div class="status" id="status">Waiting for model…</div>
+
+  <div class="controls">
+    <label class="toggle"><input type="checkbox" id="autoToggle" checked/> Auto</label>
+    <button id="manualBtn">Capture Now</button>
+    <button id="downloadBtn" class="primary" disabled>Download All</button>
+  </div>
+</div>
+
+<script>
+const SIDES = [
+  {key:'front', label:'Front', ic:'🚙'},
+  {key:'left',  label:'Left',  ic:'⬅️'},
+  {key:'right', label:'Right', ic:'➡️'},
+  {key:'rear',  label:'Rear',  ic:'🔙'},
+];
+
+const CFG = {
+  minConfidence: 0.85,   // model must be >=85% sure it's the required side
+  stableFrames: 10,      // must stay correct for ~10 frames before snap
+  countdownFrom: 3,
+};
+
+const $=id=>document.getElementById(id);
+const video=$('video'), overlay=$('overlay'), octx=overlay.getContext('2d');
+const guide=$('guide'), hint=$('hint'), stepsEl=$('steps'), trayEl=$('tray');
+const statusEl=$('status'), cdEl=$('countdown'), flash=$('flash'), autoToggle=$('autoToggle');
+const predBox=$('pred');
+
+let model=null, maxPredictions=0, labels=[];
+let stepIndex=0, stableCount=0, capturing=false;
+const captures={};
+
+SIDES.forEach(s=>{
+  const d=document.createElement('div'); d.className='step'; d.id='step-'+s.key;
+  d.innerHTML=`<span class="ic">${s.ic}</span>${s.label}`; stepsEl.appendChild(d);
+  const t=document.createElement('div'); t.className='thumb'; t.id='thumb-'+s.key;
+  t.innerHTML=`<span class="lbl">${s.label}</span>`; trayEl.appendChild(t);
+});
+function setActiveStep(){
+  SIDES.forEach((s,i)=>{ const el=$('step-'+s.key);
+    el.classList.toggle('active', i===stepIndex && !captures[s.key]);
+    el.classList.toggle('done', !!captures[s.key]); });
+}
+setActiveStep();
+
+/* ---------- camera ---------- */
+async function initCamera(){
+  if(!window.isSecureContext){
+    statusEl.textContent='⚠️ Not HTTPS — camera blocked. Open the https:// link.'; return false; }
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
+    video.srcObject=stream; await video.play();
+    overlay.width=video.videoWidth; overlay.height=video.videoHeight; return true;
+  }catch(e){
+    let m='⚠️ Camera unavailable.';
+    if(e.name==='NotAllowedError') m='⚠️ Permission denied. Tap 🔒 → Camera → Allow, reload.';
+    else if(e.name==='NotFoundError') m='⚠️ No camera found.';
+    else if(e.name==='NotReadableError') m='⚠️ Camera busy in another app.';
+    statusEl.textContent=m; return false;
+  }
+}
+
+/* ---------- load Teachable Machine model ---------- */
+async function loadModel(url){
+  if(!url.endsWith('/')) url+='/';
+  const modelURL=url+'model.json';
+  const metadataURL=url+'metadata.json';
+  model=await tmImage.load(modelURL, metadataURL);
+  maxPredictions=model.getTotalClasses();
+  labels=model.getClassLabels ? model.getClassLabels() : [];
+}
+
+/* map a predicted label to one of our side keys */
+function labelToKey(lbl){
+  const l=lbl.toLowerCase();
+  if(l.includes('front')) return 'front';
+  if(l.includes('rear')||l.includes('back')) return 'rear';
+  if(l.includes('left')) return 'left';
+  if(l.includes('right')) return 'right';
+  return null;
+}
+
+/* ---------- prediction UI ---------- */
+function renderPredictions(preds){
+  predBox.style.display='block';
+  // sort desc
+  const sorted=[...preds].sort((a,b)=>b.probability-a.probability);
+  predBox.innerHTML=sorted.map((p,i)=>{
+    const pct=Math.round(p.probability*100);
+    return `<div class="pbar ${i===0?'top':''}">
+      <span class="name">${p.className}</span>
+      <span class="track"><span class="fill" style="width:${pct}%"></span></span>
+      <span style="width:32px;text-align:right">${pct}%</span></div>`;
+  }).join('');
+}
+
+/* ---------- main loop ---------- */
+async function loop(){
+  if(model && video.readyState===4 && !capturing){
+    const preds=await model.predict(video);
+    renderPredictions(preds);
+    octx.clearRect(0,0,overlay.width,overlay.height);
+
+    const cur=SIDES[stepIndex];
+    // find probability the model assigns to the REQUIRED side
+    let reqProb=0, topKey=null, topProb=0;
+    preds.forEach(p=>{
+      const k=labelToKey(p.className);
+      if(k===cur.key) reqProb=p.probability;
+      if(p.probability>topProb){ topProb=p.probability; topKey=k; }
+    });
+
+    if(reqProb>=CFG.minConfidence && topKey===cur.key){
+      guide.className='guide lock';
+      hint.className='pill ok';
+      hint.textContent=`${cur.label} detected (${Math.round(reqProb*100)}%) — hold steady…`;
+      stableCount++;
+      if(autoToggle.checked && stableCount>=CFG.stableFrames) await runCountdown();
+    }else if(topKey && topKey!==cur.key && topProb>=CFG.minConfidence){
+      // Clearly a different side → block, tell user
+      guide.className='guide bad'; stableCount=0;
+      hint.className='pill bad';
+      const wrong=SIDES.find(s=>s.key===topKey);
+      hint.textContent=`That's the ${wrong?wrong.label:topKey} — show the ${cur.label}`;
+    }else{
+      guide.className='guide wait'; stableCount=0;
+      hint.className='pill warn';
+      hint.textContent=`Point at the ${cur.label} of the car`;
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ---------- capture ---------- */
+function runCountdown(){
+  return new Promise(res=>{
+    capturing=true; let n=CFG.countdownFrom;
+    cdEl.style.display='flex'; cdEl.textContent=n;
+    const iv=setInterval(()=>{ n--;
+      if(n<=0){ clearInterval(iv); cdEl.style.display='none'; capture(); res(); }
+      else cdEl.textContent=n; },700);
+  });
+}
+function capture(){
+  const cur=SIDES[stepIndex];
+  const c=document.createElement('canvas'); c.width=video.videoWidth; c.height=video.videoHeight;
+  c.getContext('2d').drawImage(video,0,0,c.width,c.height);
+  captures[cur.key]=c.toDataURL('image/jpeg',0.9);
+  flash.style.transition='none'; flash.style.opacity='0.9';
+  setTimeout(()=>{ flash.style.transition='opacity .5s'; flash.style.opacity='0'; },30);
+  const th=$('thumb-'+cur.key);
+  th.innerHTML=`<img src="${captures[cur.key]}"/><span class="lbl">${cur.label}</span>`;
+  stableCount=0; guide.className='guide'; advance();
+}
+function advance(){
+  const anyLeft=SIDES.findIndex(s=>!captures[s.key]);
+  if(anyLeft===-1){
+    hint.className='pill ok'; hint.textContent='✅ All 4 sides captured!';
+    statusEl.textContent='Complete — download or tap a thumbnail to retake.';
+    $('downloadBtn').disabled=false; capturing=false; setActiveStep(); return;
+  }
+  const next=SIDES.findIndex((s,i)=> i>stepIndex && !captures[s.key]);
+  stepIndex=next!==-1?next:anyLeft; setActiveStep();
+  statusEl.textContent=`Now show the ${SIDES[stepIndex].label} of the car.`;
+  setTimeout(()=>{ capturing=false; },900);
+}
+
+$('manualBtn').onclick=()=>{ if(!capturing) capture(); };
+$('downloadBtn').onclick=()=>{ SIDES.forEach(s=>{ if(captures[s.key]){
+  const a=document.createElement('a'); a.href=captures[s.key]; a.download=`car_${s.key}.jpg`; a.click(); }});};
+trayEl.addEventListener('click',e=>{
+  const t=e.target.closest('.thumb'); if(!t) return;
+  const key=t.id.replace('thumb-',''); const idx=SIDES.findIndex(s=>s.key===key);
+  delete captures[key];
+  t.innerHTML=`<span class="lbl">${SIDES[idx].label}</span>`;
+  stepIndex=idx; capturing=false; stableCount=0;
+  $('downloadBtn').disabled=true; setActiveStep();
+});
+
+/* ---------- start ---------- */
+$('loadBtn').onclick=async()=>{
+  const url=$('modelUrl').value.trim();
+  if(!url){ alert('Please paste your Teachable Machine model URL first.'); return; }
+  $('loadBtn').disabled=true; $('loadBtn').textContent='Loading…';
+  const camOk=await initCamera();
+  if(!camOk){ $('loadBtn').disabled=false; $('loadBtn').textContent='Load model & Start'; return; }
+  try{
+    await loadModel(url);
+    statusEl.textContent='Model loaded · show the Front first.';
+    $('gate').style.display='none';
+    loop();
+  }catch(err){
+    alert('Could not load the model. Double-check the URL (it should end with /models/XXXX/).');
+    $('loadBtn').disabled=false; $('loadBtn').textContent='Load model & Start';
+    statusEl.textContent='⚠️ Model load failed.';
+  }
+};
+</script>
+</body>
+</html>
