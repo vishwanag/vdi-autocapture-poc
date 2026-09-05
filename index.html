@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Car Side Auto-Capture — Roboflow POC</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#121923; --accent:#00a3e0; --good:#22c55e;
+    --warn:#f59e0b; --bad:#ef4444; --text:#e8eef6; --muted:#8ea2b6; --line:#22303f;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+  #app{display:flex;flex-direction:column;height:100dvh;max-width:520px;margin:0 auto;position:relative;}
+
+  header{padding:12px 14px;border-bottom:1px solid var(--line);
+    display:flex;align-items:center;justify-content:space-between;}
+  header h1{font-size:15px;margin:0;font-weight:600;}
+  header .brand{font-size:11px;color:var(--muted);}
+
+  .screen{flex:1;display:none;flex-direction:column;overflow:hidden;}
+  .screen.on{display:flex;}
+
+  .load{padding:20px;gap:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;height:100%;overflow:auto;}
+  .load h2{margin:0;font-size:18px;}
+  .load p{margin:0;color:var(--muted);font-size:12.5px;max-width:360px;line-height:1.5;}
+  .load input{width:100%;max-width:360px;padding:12px;border-radius:10px;border:1px solid var(--line);
+    background:#0e1520;color:var(--text);font-size:13px;}
+  .load label{width:100%;max-width:360px;text-align:left;font-size:11px;color:var(--muted);margin-bottom:-6px;}
+  .load button{width:100%;max-width:360px;padding:13px;border-radius:12px;border:none;
+    background:var(--accent);color:#001019;font-weight:700;font-size:14px;}
+  .load a{color:var(--accent);}
+  .hintbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:10px 12px;font-size:11px;color:var(--muted);max-width:360px;text-align:left;line-height:1.5;}
+
+  .menu{padding:16px;gap:12px;display:flex;flex-direction:column;height:100%;}
+  .menu h2{margin:2px 0 0;font-size:16px;text-align:center;}
+  .menu .sub{color:var(--muted);font-size:12px;text-align:center;margin-bottom:4px;}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;flex:1;}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+    cursor:pointer;transition:.2s;position:relative;overflow:hidden;padding:10px;}
+  .tile:active{transform:scale(.97);}
+  .tile .ic{font-size:34px;}
+  .tile .name{font-size:15px;font-weight:700;}
+  .tile .state{font-size:11px;color:var(--muted);}
+  .tile.done{border-color:var(--good);}
+  .tile.done .state{color:var(--good);}
+  .tile .thumb{position:absolute;inset:0;object-fit:cover;width:100%;height:100%;opacity:.9;}
+  .tile .badge{position:absolute;top:8px;right:8px;background:var(--good);color:#04160a;
+    font-size:11px;font-weight:800;border-radius:999px;padding:2px 8px;z-index:2;}
+  .tile .relabel{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.6);
+    font-size:11px;padding:4px;text-align:center;z-index:2;}
+  .menu .finish{padding:14px;border-radius:12px;border:none;font-weight:700;font-size:14px;
+    background:var(--accent);color:#001019;}
+  .menu .finish:disabled{opacity:.4;}
+
+  .cam{position:relative;height:100%;background:#000;}
+  video,canvas.overlay{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  canvas.overlay{pointer-events:none;}
+  .guide{position:absolute;inset:8% 6%;border:2px dashed rgba(255,255,255,.55);
+    border-radius:16px;pointer-events:none;transition:.2s;}
+  .guide.lock{border-color:var(--good);border-style:solid;box-shadow:0 0 24px rgba(34,197,94,.5);}
+  .guide.bad{border-color:var(--bad);}
+  .guide.wait{border-color:var(--warn);}
+
+  .camtop{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;
+    justify-content:space-between;padding:12px;background:linear-gradient(rgba(0,0,0,.6),transparent);z-index:3;}
+  .camtop .title{font-size:15px;font-weight:700;}
+  .camtop .back{background:rgba(0,0,0,.5);border:1px solid var(--line);color:var(--text);
+    border-radius:999px;padding:6px 14px;font-size:13px;cursor:pointer;}
+
+  .pred{position:absolute;top:52px;left:10px;right:10px;background:rgba(0,0,0,.5);
+    border:1px solid var(--line);border-radius:12px;padding:8px 10px;font-size:11px;z-index:3;min-height:26px;}
+  .pbar{display:flex;align-items:center;gap:8px;margin:3px 0;}
+  .pbar .name{width:52px;color:var(--muted);}
+  .pbar .track{flex:1;height:7px;background:#1c2836;border-radius:4px;overflow:hidden;}
+  .pbar .fill{height:100%;width:0;background:var(--accent);transition:width .15s;}
+  .pbar.top .name{color:var(--text);font-weight:700;}
+  .pbar.top .fill{background:var(--good);}
+  .scanning{color:var(--muted);font-size:11px;}
+
+  .hint{position:absolute;left:0;right:0;bottom:80px;text-align:center;pointer-events:none;z-index:3;}
+  .hint .pill{display:inline-block;background:rgba(0,0,0,.65);backdrop-filter:blur(6px);
+    padding:9px 18px;border-radius:999px;font-size:13px;border:1px solid var(--line);}
+  .pill.ok{color:var(--good);border-color:var(--good);}
+  .pill.warn{color:var(--warn);}
+  .pill.bad{color:var(--bad);border-color:var(--bad);}
+
+  .countdown{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    font-size:120px;font-weight:800;color:#fff;text-shadow:0 4px 30px rgba(0,0,0,.7);z-index:4;}
+  .flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:5;}
+
+  .manualbar{position:absolute;bottom:16px;left:0;right:0;display:flex;justify-content:center;z-index:3;}
+  .manualbar button{background:rgba(0,0,0,.55);border:1px solid var(--line);color:var(--text);
+    border-radius:999px;padding:10px 22px;font-size:13px;font-weight:600;}
+
+  .preview{position:relative;height:100%;background:#000;display:flex;flex-direction:column;}
+  .preview .imgwrap{flex:1;position:relative;overflow:hidden;}
+  .preview img{width:100%;height:100%;object-fit:contain;background:#000;}
+  .preview .ptitle{position:absolute;top:0;left:0;right:0;padding:12px;z-index:2;
+    background:linear-gradient(rgba(0,0,0,.6),transparent);font-weight:700;text-align:center;}
+  .preview .pbtns{display:flex;gap:10px;padding:14px;background:var(--bg);}
+  .preview .pbtns button{flex:1;padding:14px;border-radius:12px;font-weight:700;font-size:15px;border:none;}
+  .preview .retake{background:var(--panel);color:var(--text);border:1px solid var(--line);}
+  .preview .keep{background:var(--good);color:#04160a;}
+
+  .status{padding:6px 14px;font-size:11px;color:var(--muted);text-align:center;min-height:18px;}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>🚗 Car Side Auto-Capture</h1>
+    <span class="brand">Roboflow POC · DENSO</span>
+  </header>
+
+  <!-- SCREEN 1: Load model -->
+  <div class="screen on" id="screenLoad">
+    <div class="load">
+      <h2>🎯 Connect Roboflow model</h2>
+      <div class="hintbox">
+        From your trained model page:<br>
+        • <b>Model ID</b> = your model URL, e.g. <code>car-angle-nawxj-aenjp/1</code><br>
+        • <b>API key</b> → Roboflow → <a href="https://app.roboflow.com/settings/api" target="_blank">Settings → API Keys</a><br>
+        This model detects all 4 sides (front/right/left/rear) 🎉
+      </div>
+      <label>Model ID / Version</label>
+      <input id="modelId" placeholder="car-angle-nawxj-aenjp/1" />
+      <label>Roboflow API Key (Private)</label>
+      <input id="apiKey" placeholder="your_private_api_key" />
+      <button id="loadBtn">Load model & Start</button>
+      <p id="loadMsg" style="color:var(--warn)"></p>
+    </div>
+  </div>
+
+  <!-- SCREEN 2: Menu -->
+  <div class="screen" id="screenMenu">
+    <div class="menu">
+      <h2>Select a side to capture</h2>
+      <div class="sub">Tap a side → camera opens → auto-captures when correct</div>
+      <div class="grid" id="grid"></div>
+      <button class="finish" id="finishBtn" disabled>Download All (0/4)</button>
+    </div>
+  </div>
+
+  <!-- SCREEN 3: Camera -->
+  <div class="screen" id="screenCam">
+    <div class="cam">
+      <video id="video" playsinline muted autoplay></video>
+      <canvas class="overlay" id="overlay"></canvas>
+      <div class="guide" id="guide"></div>
+      <div class="camtop">
+        <button class="back" id="backBtn">← Back</button>
+        <span class="title" id="camTitle">Front</span>
+        <span style="width:60px"></span>
+      </div>
+      <div class="pred" id="pred"><span class="scanning">Scanning…</span></div>
+      <div class="countdown" id="countdown"></div>
+      <div class="flash" id="flash"></div>
+      <div class="hint"><span class="pill" id="hint">Point at the car…</span></div>
+      <div class="manualbar"><button id="manualBtn">📸 Capture manually</button></div>
+    </div>
+  </div>
+
+  <!-- SCREEN 4: Preview -->
+  <div class="screen" id="screenPreview">
+    <div class="preview">
+      <div class="imgwrap">
+        <div class="ptitle" id="previewTitle">Front — preview</div>
+        <img id="previewImg" alt="preview"/>
+      </div>
+      <div class="pbtns">
+        <button class="retake" id="retakeBtn">↺ Retake</button>
+        <button class="keep" id="keepBtn">✓ Keep</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="status" id="status">Enter model details to begin…</div>
+</div>
+
+<script>
+const SIDES = [
+  {key:'front', label:'Front', ic:'🚙'},
+  {key:'right', label:'Right', ic:'➡️'},
+  {key:'rear',  label:'Rear',  ic:'🔙'},
+  {key:'left',  label:'Left',  ic:'⬅️'},
+];
+
+const CFG = {
+  minConfidence: 0.70,   // Roboflow confidence needed for the required side
+  stableHits:    2,      // consecutive successful API samples before capture
+  sampleEveryMs: 800,    // how often we call the API (throttled to save credits)
+  countdownFrom: 3,
+};
+
+const $=id=>document.getElementById(id);
+const video=$('video'), overlay=$('overlay'), octx=overlay.getContext('2d');
+const guide=$('guide'), hint=$('hint'), predBox=$('pred');
+const cdEl=$('countdown'), flash=$('flash'), statusEl=$('status');
+
+let ROBOFLOW_MODEL='', ROBOFLOW_KEY='';
+let activeSide=null, stableCount=0, capturing=false;
+let camStream=null, tempCapture=null, sampleTimer=null, inFlight=false;
+const captures={};
+
+function show(id){
+  ['screenLoad','screenMenu','screenCam','screenPreview']
+    .forEach(s=>$(s).classList.toggle('on', s===id));
+}
+
+function buildMenu(){
+  const grid=$('grid'); grid.innerHTML='';
+  SIDES.forEach(s=>{
+    const t=document.createElement('div');
+    t.className='tile'+(captures[s.key]?' done':''); t.id='tile-'+s.key;
+    if(captures[s.key]){
+      t.innerHTML=`<img class="thumb" src="${captures[s.key]}"/>
+        <span class="badge">✓</span><span class="relabel">${s.label} · tap to retake</span>`;
+    }else{
+      t.innerHTML=`<div class="ic">${s.ic}</div><div class="name">${s.label}</div>
+        <div class="state">Tap to capture</div>`;
+    }
+    t.onclick=()=>openCamera(s);
+    grid.appendChild(t);
+  });
+  const done=Object.keys(captures).length;
+  const fb=$('finishBtn'); fb.textContent=`Download All (${done}/4)`; fb.disabled=done===0;
+}
+
+async function startStream(){
+  if(camStream) return true;
+  if(!window.isSecureContext){ statusEl.textContent='⚠️ Not HTTPS — camera blocked.'; return false; }
+  try{
+    camStream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
+    video.srcObject=camStream; await video.play();
+    overlay.width=video.videoWidth; overlay.height=video.videoHeight; return true;
+  }catch(e){
+    let m='⚠️ Camera unavailable.';
+    if(e.name==='NotAllowedError') m='⚠️ Permission denied. Tap 🔒 → Camera → Allow, reload.';
+    else if(e.name==='NotFoundError') m='⚠️ No camera found.';
+    else if(e.name==='NotReadableError') m='⚠️ Camera busy in another app.';
+    statusEl.textContent=m; return false;
+  }
+}
+function stopSampling(){ if(sampleTimer){ clearInterval(sampleTimer); sampleTimer=null; } }
+
+async function openCamera(side){
+  activeSide=side; $('camTitle').textContent=side.label;
+  stableCount=0; capturing=false;
+  predBox.innerHTML='<span class="scanning">Scanning…</span>';
+  show('screenCam');
+  const ok=await startStream(); if(!ok) return;
+  statusEl.textContent=`Show the ${side.label} of the car.`;
+  stopSampling();
+  sampleTimer=setInterval(sampleFrame, CFG.sampleEveryMs);
+}
+
+/* ===== Spanish (and English) label mapping for THIS model ===== */
+function classToKey(lbl){
+  const l=(lbl||'').toLowerCase().trim();
+  // Spanish labels from the car-angle dataset:
+  if(l==='frente') return 'front';
+  if(l==='trasero') return 'rear';
+  if(l==='perfil_derecho'||l==='perfil derecho') return 'right';
+  if(l==='perfil_izquierdo'||l==='perfil izquierdo') return 'left';
+  // English fallbacks (in case you retrain with English names):
+  if(l.includes('front')) return 'front';
+  if(l.includes('rear')||l.includes('back')) return 'rear';
+  if(l.includes('right')||l.includes('derech')) return 'right';
+  if(l.includes('left')||l.includes('izquierd')) return 'left';
+  if(l.includes('side')||l.includes('perfil')) return 'side';
+  return null;
+}
+function keyMatches(predKey){
+  if(!predKey) return false;
+  if(predKey===activeSide.key) return true;
+  if(predKey==='side' && (activeSide.key==='left'||activeSide.key==='right')) return true;
+  return false;
+}
+function prettyWrong(predKey, raw){
+  const s=SIDES.find(x=>x.key===predKey);
+  return s?s.label:raw;
+}
+
+function frameToBase64(){
+  const c=document.createElement('canvas');
+  const scale=Math.min(1, 640/video.videoWidth);
+  c.width=video.videoWidth*scale; c.height=video.videoHeight*scale;
+  c.getContext('2d').drawImage(video,0,0,c.width,c.height);
+  return c.toDataURL('image/jpeg',0.7).split(',')[1];
+}
+
+async function sampleFrame(){
+  if(capturing || inFlight || video.readyState!==4) return;
+  inFlight=true;
+  try{
+    const b64=frameToBase64();
+    const url=`https://detect.roboflow.com/${ROBOFLOW_MODEL}?api_key=${encodeURIComponent(ROBOFLOW_KEY)}`;
+    const res=await fetch(url,{method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:b64});
+    if(!res.ok){ throw new Error('HTTP '+res.status); }
+    const data=await res.json();
+    handlePredictions(data);
+  }catch(err){
+    predBox.innerHTML=`<span class="scanning" style="color:var(--bad)">API error — check model ID / key. (${err.message})</span>`;
+  }finally{ inFlight=false; }
+}
+
+function handlePredictions(data){
+  // Object-detection response: {predictions:[{class,confidence,x,y,width,height}, ...]}
+  let preds=[];
+  if(Array.isArray(data.predictions)){
+    preds=data.predictions.map(p=>({cls:p.class, conf:p.confidence}));
+  }else if(data.predictions && typeof data.predictions==='object'){
+    preds=Object.entries(data.predictions).map(([cls,v])=>({cls, conf:v.confidence!==undefined?v.confidence:v}));
+  }
+  if(!preds.length){
+    predBox.innerHTML='<span class="scanning">No car detected…</span>';
+    guide.className='guide wait'; stableCount=0;
+    hint.className='pill warn'; hint.textContent=`Point at the ${activeSide.label} of the car`;
+    return;
+  }
+  // keep highest-confidence prediction per mapped side
+  preds.sort((a,b)=>b.conf-a.conf);
+  predBox.innerHTML=preds.slice(0,4).map((p,i)=>{
+    const pct=Math.round(p.conf*100);
+    const k=classToKey(p.cls);
+    const nice=k?(SIDES.find(s=>s.key===k)?.label||p.cls):p.cls;
+    return `<div class="pbar ${i===0?'top':''}">
+      <span class="name">${nice}</span>
+      <span class="track"><span class="fill" style="width:${pct}%"></span></span>
+      <span style="width:32px;text-align:right">${pct}%</span></div>`;
+  }).join('');
+
+  const top=preds[0];
+  const topKey=classToKey(top.cls);
+
+  if(keyMatches(topKey) && top.conf>=CFG.minConfidence){
+    guide.className='guide lock'; hint.className='pill ok';
+    hint.textContent=`${activeSide.label} detected (${Math.round(top.conf*100)}%) — hold steady…`;
+    stableCount++;
+    if(stableCount>=CFG.stableHits){ stopSampling(); runCountdown(); }
+  }else if(topKey && !keyMatches(topKey) && top.conf>=CFG.minConfidence){
+    guide.className='guide bad'; stableCount=0;
+    hint.className='pill bad';
+    hint.textContent=`That's the ${prettyWrong(topKey, top.cls)} — show the ${activeSide.label}`;
+  }else{
+    guide.className='guide wait'; stableCount=0;
+    hint.className='pill warn';
+    hint.textContent=`Almost — steady the ${activeSide.label} in frame`;
+  }
+}
+
+function runCountdown(){
+  capturing=true; let n=CFG.countdownFrom;
+  cdEl.style.display='flex'; cdEl.textContent=n;
+  const iv=setInterval(()=>{ n--;
+    if(n<=0){ clearInterval(iv); cdEl.style.display='none'; doCapture(); }
+    else cdEl.textContent=n; },700);
+}
+function doCapture(){
+  const c=document.createElement('canvas');
+  c.width=video.videoWidth; c.height=video.videoHeight;
+  c.getContext('2d').drawImage(video,0,0,c.width,c.height);
+  tempCapture=c.toDataURL('image/jpeg',0.9);
+  flash.style.transition='none'; flash.style.opacity='0.9';
+  setTimeout(()=>{ flash.style.transition='opacity .5s'; flash.style.opacity='0'; },30);
+  stopSampling();
+  $('previewTitle').textContent=`${activeSide.label} — preview`;
+  $('previewImg').src=tempCapture; show('screenPreview');
+  statusEl.textContent='Preview — keep or retake.';
+}
+$('manualBtn').onclick=()=>{ if(!capturing && activeSide){ stopSampling(); doCapture(); } };
+
+$('keepBtn').onclick=()=>{
+  captures[activeSide.key]=tempCapture; tempCapture=null; capturing=false;
+  buildMenu(); show('screenMenu');
+  const done=Object.keys(captures).length;
+  statusEl.textContent = done===4 ? '✅ All 4 sides captured!' : `${done}/4 captured — pick another side.`;
+};
+$('retakeBtn').onclick=async()=>{
+  tempCapture=null; capturing=false; stableCount=0; await openCamera(activeSide);
+};
+$('backBtn').onclick=()=>{
+  stopSampling(); capturing=false; stableCount=0; buildMenu(); show('screenMenu');
+  const done=Object.keys(captures).length;
+  statusEl.textContent = done? `${done}/4 captured.` : 'Pick a side to capture.';
+};
+$('finishBtn').onclick=()=>{
+  SIDES.forEach(s=>{ if(captures[s.key]){
+    const a=document.createElement('a'); a.href=captures[s.key]; a.download=`car_${s.key}.jpg`; a.click(); }});
+};
+
+$('loadBtn').onclick=async()=>{
+  const mid=$('modelId').value.trim().replace(/^\/+|\/+$/g,'');
+  const key=$('apiKey').value.trim();
+  if(!mid||!key){ $('loadMsg').textContent='Enter both Model ID/Version and API key.'; return; }
+  ROBOFLOW_MODEL=mid; ROBOFLOW_KEY=key;
+  $('loadBtn').disabled=true; $('loadBtn').textContent='Starting…';
+  const ok=await startStream();
+  if(!ok){ $('loadBtn').disabled=false; $('loadBtn').textContent='Load model & Start'; return; }
+  buildMenu(); show('screenMenu');
+  statusEl.textContent='Connected · pick a side to capture.';
+};
+</script>
+</body>
+</html>
